@@ -4,13 +4,21 @@ A terminal UI for [Poke](https://poke.com) — chat with your AI assistant witho
 
 Built with [Ink](https://github.com/vadimdemedes/ink) (React for CLIs) and the [Poke SDK](https://www.npmjs.com/package/poke).
 
+This repository is a fork of [f/poke-tui](https://github.com/f/poke-tui) with Windows tunnel fixes (see below). Upstream is `v0.0.6`; this fork is `0.0.7`.
+
 ## Quick start
 
 ```bash
-npx poke-tui
+# from this fork
+git clone https://github.com/nutdevza/poke-tui
+cd poke-tui
+npm install
+node bin/poke-tui.js
 ```
 
-On first run, you'll be guided through a one-time setup to paste your API key.
+Or, after a global install of this tree: `poke-tui` / `poke-chat`.
+
+On first run, you'll be guided through a one-time setup. **Kitchen API keys can send messages but cannot create the MCP tunnel** (HTTP 403 Insufficient scope). Use `poke login` (CLI device login) so `~/.config/poke/credentials.json` exists.
 
 ## How it works
 
@@ -79,6 +87,18 @@ Create automated triggers that fire your Poke agent with data:
 - Node.js 18+
 - A [Poke](https://poke.com) account with an API key
 
+## Windows / tunnel fixes (this fork)
+
+Stock poke-tui 404s `reply_to_terminal` on Windows and with Poke's current MCP client:
+
+1. **IPv4 bind** — advertise `http://127.0.0.1:<port>/mcp`, not `localhost` (Windows `localhost` is often `::1`).
+2. **Prefixed MCP path** — Poke calls `/{connectionId}/mcp` through the tunnel. Accept that path as `/mcp` instead of returning `Not found`.
+3. **CLI login** — tunnel create is `POST /mcp/connections/cli` and needs a `poke login` token, not a Kitchen V2 key.
+4. **Orchestrator dispatch** — inbound chat hits Poke's main orchestrator, which does not own MCP tools. The send prompt tells it to dispatch the `poke-tui-terminal` sub-agent.
+5. **`/status`** prints the live `Tunnel:` URL and connection id. After a restart, delete `~/.config/poke-tui/state.json` if Poke still aims at a dead id.
+
+Keep the TUI process running. Ctrl-C creates a new tunnel URL; Poke must reattach.
+
 ## How the MCP tunnel works
 
 poke-tui starts a lightweight HTTP server locally that implements the [Model Context Protocol](https://modelcontextprotocol.io) (MCP). It exposes two tools:
@@ -114,6 +134,7 @@ src/
 
 ## Credits
 
+- Upstream: [f/poke-tui](https://github.com/f/poke-tui)
 - [Poke](https://poke.com) by [The Interaction Company of California](https://interaction.co)
 - [Ink](https://github.com/vadimdemedes/ink) by Vadim Demedes
 - [Poke SDK](https://www.npmjs.com/package/poke)

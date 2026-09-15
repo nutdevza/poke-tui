@@ -99,7 +99,13 @@ async function handleCommand(text) {
 
   if (cmd === "status") {
     tuiEvents.emit("system", client.tunnelInfo ? "Connected and ready." : "Connecting…");
-    tuiEvents.emit("system", `Webhooks: ${client.webhooks.length}`);
+    if (client.tunnelInfo?.tunnelUrl) {
+      tuiEvents.emit("system", `Tunnel: ${client.tunnelInfo.tunnelUrl}`);
+    }
+    if (client.tunnelInfo?.connectionId) {
+      tuiEvents.emit("system", `Connection: ${client.tunnelInfo.connectionId}`);
+    }
+    tuiEvents.emit("system", `Webhooks: ${client.webhooks.length}${client.terminalWebhook ? " + terminal webhook" : ""}`);
     return;
   }
 

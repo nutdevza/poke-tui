@@ -3,14 +3,17 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
+const TUNNEL_NAME = "poke-tui-terminal";
+
 const REPLY_INSTRUCTION =
   "[TERMINAL SESSION — MANDATORY]\n" +
-  "The user is in a TERMINAL-ONLY session. This is non-negotiable.\n" +
-  "DO NOT reply via iMessage. DO NOT reply via SMS. DO NOT reply via Telegram.\n" +
-  "DO NOT write ANY text in your chat response. Leave it completely empty.\n" +
-  "Your ONLY action is to call the reply_to_terminal tool with your full answer.\n" +
-  "If you write anything in the chat message, the user will receive a duplicate and be confused.\n" +
-  "ONLY call reply_to_terminal. NOTHING else. No chat message. Zero words in chat.\n" +
+  "The user is typing in poke-tui. MCP connection name: poke-tui-terminal.\n" +
+  "You are the MAIN ORCHESTRATOR. You do not have reply_to_terminal on yourself.\n" +
+  "MCP tools live on the poke-tui-terminal SUB-AGENT only.\n" +
+  "You MUST immediately dispatch that MCP sub-agent.\n" +
+  "The sub-agent MUST call tool reply_to_terminal with argument text = your COMPLETE answer.\n" +
+  "DO NOT reply via iMessage, SMS, or Telegram. Leave the chat body empty.\n" +
+  "If you answer in iMessage, the terminal stays blank — that is a failure.\n" +
   "[END TERMINAL SESSION]\n\n";
 
 const CONFIG_DIR = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
@@ -33,11 +36,12 @@ export class PokeClient {
     this.tunnel = null;
     this.tunnelInfo = null;
     this.webhooks = [];
+    this.terminalWebhook = loadState().terminalWebhook || null;
   }
 
   async init(mcpPort) {
     this.poke = new Poke({ apiKey: this.apiKey });
-    this.mcpUrl = `http://localhost:${mcpPort}/mcp`;
+    this.mcpUrl = `http://127.0.0.1:${mcpPort}/mcp`;
     this.onEvent("status", "SDK initialized");
   }
 
@@ -61,19 +65,27 @@ export class PokeClient {
       return;
     }
 
-    await this.cleanupOldConnection();
+    // Keep the previous cloud tunnel URL alive. Poke integrations often still
+    // call /{old-uuid}/mcp on the new local server after a restart.
 
     this.tunnel = new PokeTunnel({
       url: this.mcpUrl,
-      name: "Poke TUI Terminal",
+      name: TUNNEL_NAME,
       token: token || this.apiKey,
       cleanupOnStop: false,
     });
 
     this.tunnel.on("connected", (info) => {
       this.tunnelInfo = info;
-      saveState({ connectionId: info.connectionId });
+      const prev = loadState();
+      saveState({
+        ...prev,
+        connectionId: info.connectionId,
+        tunnelUrl: info.tunnelUrl || null,
+        name: TUNNEL_NAME,
+      });
       this.onEvent("tunnel-connected", info);
+      this.ensureTerminalWebhook().catch(() => {});
     });
 
     this.tunnel.on("disconnected", () => {
@@ -105,11 +117,47 @@ export class PokeClient {
     }
   }
 
+  async ensureTerminalWebhook() {
+    const state = loadState();
+    if (state.terminalWebhook?.webhookUrl && state.terminalWebhook?.webhookToken) {
+      this.terminalWebhook = state.terminalWebhook;
+      return this.terminalWebhook;
+    }
+    try {
+      const webhook = await this.poke.createWebhook({
+        condition: "When poke-tui fires a terminal chat payload with source poke-tui-terminal",
+        action:
+          "Dispatch the poke-tui-terminal MCP sub-agent. " +
+          "Call reply_to_terminal with argument text set to your complete answer. " +
+          "Do not send iMessage, SMS, or Telegram. Leave the chat body empty.",
+      });
+      this.terminalWebhook = webhook;
+      saveState({ ...loadState(), terminalWebhook: webhook });
+      this.onEvent("status", "Terminal webhook ready");
+      return webhook;
+    } catch (err) {
+      this.onEvent("error", `Webhook setup skipped: ${err.message}`);
+      return null;
+    }
+  }
+
   async sendMessage(text) {
     if (!this.poke) throw new Error("SDK not initialized");
     const fullText = REPLY_INSTRUCTION + text;
-    const res = await this.poke.sendMessage(fullText);
-    return res;
+    if (!this.terminalWebhook) {
+      await this.ensureTerminalWebhook();
+    }
+    if (this.terminalWebhook?.webhookUrl && this.terminalWebhook?.webhookToken) {
+      return this.poke.sendWebhook({
+        webhookUrl: this.terminalWebhook.webhookUrl,
+        webhookToken: this.terminalWebhook.webhookToken,
+        data: {
+          source: "poke-tui-terminal",
+          message: fullText,
+        },
+      });
+    }
+    return this.poke.sendMessage(fullText);
   }
 
   async createWebhook({ condition, action }) {
