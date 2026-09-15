@@ -55,25 +55,52 @@ function ThinkingIndicator() {
   );
 }
 
-function Message({ role, text }) {
+function formatStamp(at) {
+  try {
+    return new Intl.DateTimeFormat("th-TH", {
+      timeZone: "Asia/Bangkok",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(new Date(at));
+  } catch {
+    const d = new Date(at);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  }
+}
+
+function Stamp({ at }) {
+  if (!at) return null;
+  return h(Text, { dimColor: true }, `  ${formatStamp(at)}`);
+}
+
+function Message({ role, text, at }) {
   if (role === "you") {
     return h(Box, { paddingX: 1, marginTop: 1 },
       h(Text, { bold: true }, "❯ "),
       h(Text, null, text),
+      h(Stamp, { at }),
     );
   }
   if (role === "poke") {
     return h(Box, { paddingX: 1, flexDirection: "column" },
-      h(Text, { color: "#7B68EE", bold: true }, "poke"),
+      h(Box, null,
+        h(Text, { color: "#7B68EE", bold: true }, "poke"),
+        h(Stamp, { at }),
+      ),
       h(Box, { paddingLeft: 2 }, h(Text, null, text)),
     );
   }
   if (role === "error") {
     return h(Box, { paddingX: 1 },
       h(Text, { color: "red" }, `✗ ${text}`),
+      h(Stamp, { at }),
     );
   }
-  return h(Box, { paddingX: 1 }, h(Text, { dimColor: true }, text));
+  return h(Box, { paddingX: 1 },
+    h(Text, { dimColor: true }, text),
+    h(Stamp, { at }),
+  );
 }
 
 function App() {
@@ -89,7 +116,7 @@ function App() {
   const nextId = useCallback(() => `msg-${++idRef.current}`, []);
 
   const push = useCallback((role, text) => {
-    setMessages((prev) => [...prev.slice(-100), { role, text, id: nextId() }]);
+    setMessages((prev) => [...prev.slice(-100), { role, text, id: nextId(), at: Date.now() }]);
   }, [nextId]);
 
   useEffect(() => {
@@ -173,7 +200,7 @@ function App() {
 
     h(Box, { flexDirection: "column", flexGrow: 1 },
       ...visible.map((msg) =>
-        h(Message, { key: msg.id, role: msg.role, text: msg.text })
+        h(Message, { key: msg.id, role: msg.role, text: msg.text, at: msg.at })
       ),
       thinking && h(ThinkingIndicator, { key: "thinking" }),
     ),
