@@ -85,7 +85,6 @@ export class PokeClient {
         name: TUNNEL_NAME,
       });
       this.onEvent("tunnel-connected", info);
-      this.ensureTerminalWebhook().catch(() => {});
     });
 
     this.tunnel.on("disconnected", () => {
@@ -143,21 +142,9 @@ export class PokeClient {
 
   async sendMessage(text) {
     if (!this.poke) throw new Error("SDK not initialized");
-    const fullText = REPLY_INSTRUCTION + text;
-    if (!this.terminalWebhook) {
-      await this.ensureTerminalWebhook();
-    }
-    if (this.terminalWebhook?.webhookUrl && this.terminalWebhook?.webhookToken) {
-      return this.poke.sendWebhook({
-        webhookUrl: this.terminalWebhook.webhookUrl,
-        webhookToken: this.terminalWebhook.webhookToken,
-        data: {
-          source: "poke-tui-terminal",
-          message: fullText,
-        },
-      });
-    }
-    return this.poke.sendMessage(fullText);
+    // Plain chat must use inbound sendMessage. Routing it through a stored
+    // webhook 502s when the trigger/token is from a previous session.
+    return this.poke.sendMessage(REPLY_INSTRUCTION + text);
   }
 
   async createWebhook({ condition, action }) {

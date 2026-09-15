@@ -159,7 +159,10 @@ async function handleCommand(text) {
         await client.fireWebhook(index, data);
         tuiEvents.emit("system", "Webhook fired.");
       } catch (err) {
-        tuiEvents.emit("error", err.message);
+        tuiEvents.emit(
+          "error",
+          `${err.message} — stale webhook from an old session. Create a new one with /webhook create <when> | <do what>, then /webhook fire 0 {"status":"test"}. Plain chat does not use webhooks.`
+        );
       }
       return;
     }
