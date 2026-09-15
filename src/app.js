@@ -2,7 +2,7 @@ import { createMcpServer, startMcpHttpServer, mcpEvents } from "./mcp-server.js"
 import { PokeClient } from "./poke-client.js";
 import { startTUI, tuiEvents } from "./tui.js";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, basename } from "node:path";
 import { homedir } from "node:os";
 
 function acquireLock() {
@@ -52,6 +52,40 @@ if (!POKE_API_KEY) {
 acquireLock();
 const inkInstance = startTUI();
 
+tuiEvents.on("transcript", ({ kind, messages }) => {
+  if (kind === "history") {
+    const last = messages.slice(-20);
+    if (last.length === 0) {
+      tuiEvents.emit("system", "No messages yet.");
+      return;
+    }
+    for (const m of last) {
+      const t = m.at
+        ? new Date(m.at).toLocaleTimeString("th-TH", {
+            timeZone: "Asia/Bangkok",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+          })
+        : "";
+      tuiEvents.emit("system", `${t} ${m.role}: ${String(m.text).replace(/\s+/g, " ").slice(0, 140)}`);
+    }
+    return;
+  }
+  if (kind === "export") {
+    const dir = join(homedir(), "Downloads");
+    mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    const filePath = join(dir, `poke-tui-${stamp}.md`);
+    const md = messages.map((m) => {
+      const t = m.at ? new Date(m.at).toISOString() : "";
+      return `### ${m.role} (${t})\n\n${m.text}\n`;
+    }).join("\n");
+    writeFileSync(filePath, md, "utf8");
+    tuiEvents.emit("system", `Exported ${messages.length} messages to ${filePath}`);
+  }
+});
+
 const client = new PokeClient({
   apiKey: POKE_API_KEY,
   onEvent: (type, data) => {
@@ -62,10 +96,13 @@ const client = new PokeClient({
       case "tunnel-disconnected":
         tuiEvents.emit("connected", false);
         tuiEvents.emit("thinking", false);
-        tuiEvents.emit("system", "Connection lost. Restart poke-chat to open a new tunnel.");
+        tuiEvents.emit("system", "Connection lost. Reconnecting…");
         break;
       case "tunnel-error":
         tuiEvents.emit("error", `Connection error: ${data}`);
+        break;
+      case "status":
+        tuiEvents.emit("system", data);
         break;
       case "error":
         tuiEvents.emit("error", data);
@@ -116,7 +153,46 @@ async function handleCommand(text) {
     tuiEvents.emit("system", "  /webhooks");
     tuiEvents.emit("system", "  /status");
     tuiEvents.emit("system", "  /clear");
-    tuiEvents.emit("system", "  Esc cancels wait · 45s timeout if no terminal reply");
+    tuiEvents.emit("system", "  /history");
+    tuiEvents.emit("system", "  /export");
+    tuiEvents.emit("system", "  /attach <path>   (also /sendfile)");
+    tuiEvents.emit("system", "  Esc cancels wait · PgUp/PgDn scroll · 45s timeout");
+    return;
+  }
+
+  if (cmd === "history") {
+    tuiEvents.emit("dump-transcript", "history");
+    return;
+  }
+
+  if (cmd === "export") {
+    tuiEvents.emit("dump-transcript", "export");
+    return;
+  }
+
+  if (cmd === "attach" || cmd === "sendfile") {
+    const raw = parts.slice(1).join(" ").trim().replace(/^["']|["']$/g, "");
+    if (!raw) {
+      tuiEvents.emit("error", "Usage: /attach <path>");
+      return;
+    }
+    try {
+      const filePath = resolve(raw);
+      const buf = readFileSync(filePath);
+      if (buf.length > 24_000) {
+        tuiEvents.emit("error", `File too large (${buf.length} bytes). Max 24KB.`);
+        return;
+      }
+      const name = basename(filePath);
+      const body = buf.toString("utf8");
+      const wrapped = `Attached file ${name}:\n\`\`\`\n${body}\n\`\`\`\nPlease use this as context.`;
+      tuiEvents.emit("message", "you", `/attach ${name}`);
+      const res = await client.sendMessage(wrapped);
+      if (res.success === false) tuiEvents.emit("error", res.message || "Failed to send file.");
+      else tuiEvents.emit("system", `Attached ${name} (${buf.length} bytes).`);
+    } catch (err) {
+      tuiEvents.emit("error", err.message);
+    }
     return;
   }
 

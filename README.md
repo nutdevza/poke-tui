@@ -60,6 +60,10 @@ poke-tui checks credentials in this order: `POKE_API_KEY` env var → `~/.config
 |---------|-------------|
 | `/help` | Show available commands |
 | `/status` | Show connection status |
+| `/history` | Last 20 lines in this session |
+| `/export` | Write the session to `~/Downloads/poke-tui-*.md` |
+| `/attach <path>` | Send a file (max 24KB) as context (`/sendfile` works too) |
+| `/clear` | Clear the visible chat |
 | `/webhook create <when> \| <do what>` | Create a webhook trigger |
 | `/webhook fire <#> {"data":"here"}` | Fire a webhook with JSON data |
 | `/webhooks` | List active webhooks |

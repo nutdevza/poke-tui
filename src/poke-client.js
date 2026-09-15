@@ -42,10 +42,15 @@ export class PokeClient {
     this.tunnelInfo = null;
     this.webhooks = [];
     this.terminalWebhook = null;
+    this.mcpPort = null;
+    this.stopping = false;
+    this.reconnectTimer = null;
+    this.starting = false;
   }
 
   async init(mcpPort) {
     this.poke = new Poke({ apiKey: this.apiKey });
+    this.mcpPort = mcpPort;
     this.mcpUrl = `http://127.0.0.1:${mcpPort}/mcp`;
     this.onEvent("status", "SDK initialized");
   }
@@ -68,9 +73,26 @@ export class PokeClient {
     }
   }
 
+  scheduleReconnect() {
+    if (this.stopping || this.reconnectTimer || this.starting) return;
+    this.onEvent("status", "Tunnel dropped. Reconnecting in 3s…");
+    this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
+      try {
+        await this.startTunnel(this.mcpPort);
+      } catch {
+        this.scheduleReconnect();
+      }
+    }, 3000);
+  }
+
   async startTunnel(mcpPort) {
+    if (mcpPort) this.mcpPort = mcpPort;
+    if (this.starting) return;
+    this.starting = true;
     const token = getToken();
     if (!token && !this.apiKey) {
+      this.starting = false;
       this.onEvent("error", "Not logged in. Run `poke login` first or set POKE_API_KEY.");
       return;
     }
@@ -98,6 +120,7 @@ export class PokeClient {
     this.tunnel.on("disconnected", () => {
       this.tunnelInfo = null;
       this.onEvent("tunnel-disconnected");
+      this.scheduleReconnect();
     });
 
     this.tunnel.on("error", (err) => {
@@ -114,13 +137,14 @@ export class PokeClient {
 
     try {
       const info = await this.tunnel.start();
-      // Explicitly sync tools right after tunnel connects —
-      // activateTunnel() syncs server-side but doesn't emit the event
       setTimeout(() => this.syncTools(), 2000);
       return info;
     } catch (err) {
       this.onEvent("tunnel-error", err.message);
+      this.scheduleReconnect();
       throw err;
+    } finally {
+      this.starting = false;
     }
   }
 
@@ -208,6 +232,11 @@ export class PokeClient {
   }
 
   async stop() {
+    this.stopping = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (this.tunnel) {
       try {
         await this.tunnel.stop();

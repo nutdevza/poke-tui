@@ -74,6 +74,48 @@ function Stamp({ at }) {
   return h(Text, { dimColor: true }, `  ${formatStamp(at)}`);
 }
 
+function renderBlocks(text) {
+  const nodes = [];
+  const re = /```(\w*)\n?([\s\S]*?)```/g;
+  let last = 0;
+  let key = 0;
+  let match;
+  while ((match = re.exec(text))) {
+    if (match.index > last) {
+      nodes.push(h(Text, { key: `t${key++}` }, text.slice(last, match.index)));
+    }
+    const lang = match[1] || "code";
+    const code = match[2].replace(/\n$/, "");
+    nodes.push(
+      h(Box, { key: `c${key++}`, flexDirection: "column", paddingLeft: 1 },
+        h(Text, { dimColor: true }, lang),
+        h(Text, { color: "cyan" }, code),
+      )
+    );
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) {
+    nodes.push(h(Text, { key: `t${key++}` }, text.slice(last)));
+  }
+  return nodes.length ? nodes : [h(Text, { key: "empty" }, text)];
+}
+
+function PokeBody({ text }) {
+  const [shown, setShown] = useState("");
+  useEffect(() => {
+    let i = 0;
+    let timer;
+    const tick = () => {
+      i = Math.min(text.length, i + Math.max(3, Math.ceil(text.length / 45)));
+      setShown(text.slice(0, i));
+      if (i < text.length) timer = setTimeout(tick, 20);
+    };
+    tick();
+    return () => clearTimeout(timer);
+  }, [text]);
+  return h(Box, { flexDirection: "column", paddingLeft: 2 }, ...renderBlocks(shown));
+}
+
 function Message({ role, text, at }) {
   if (role === "you") {
     return h(Box, { paddingX: 1, marginTop: 1 },
@@ -88,7 +130,7 @@ function Message({ role, text, at }) {
         h(Text, { color: "#7B68EE", bold: true }, "poke"),
         h(Stamp, { at }),
       ),
-      h(Box, { paddingLeft: 2 }, h(Text, null, text)),
+      h(PokeBody, { text }),
     );
   }
   if (role === "error") {
@@ -110,13 +152,20 @@ function App() {
   const [thinking, setThinking] = useState(false);
   const [connected, setConnected] = useState(false);
   const [userName, setUserName] = useState(null);
+  const [scroll, setScroll] = useState(0);
   const idRef = useRef(0);
   const lastPokeRef = useRef({ text: "", at: 0 });
+  const messagesRef = useRef([]);
 
   const nextId = useCallback(() => `msg-${++idRef.current}`, []);
 
   const push = useCallback((role, text) => {
-    setMessages((prev) => [...prev.slice(-100), { role, text, id: nextId(), at: Date.now() }]);
+    setMessages((prev) => {
+      const next = [...prev.slice(-200), { role, text, id: nextId(), at: Date.now() }];
+      messagesRef.current = next;
+      return next;
+    });
+    setScroll(0);
   }, [nextId]);
 
   useEffect(() => {
@@ -139,7 +188,13 @@ function App() {
     const onThink = (v) => setThinking(v);
     const onQuit = () => exit();
     const onUser = (name) => setUserName(name);
-    const onClear = () => setMessages([]);
+    const onClear = () => {
+      messagesRef.current = [];
+      setMessages([]);
+    };
+    const onDump = (kind) => {
+      tuiEvents.emit("transcript", { kind, messages: messagesRef.current.slice() });
+    };
 
     tuiEvents.on("message", onMsg);
     tuiEvents.on("system", onSys);
@@ -149,6 +204,7 @@ function App() {
     tuiEvents.on("quit", onQuit);
     tuiEvents.on("user-name", onUser);
     tuiEvents.on("clear", onClear);
+    tuiEvents.on("dump-transcript", onDump);
 
     return () => {
       tuiEvents.off("message", onMsg);
@@ -159,6 +215,7 @@ function App() {
       tuiEvents.off("quit", onQuit);
       tuiEvents.off("user-name", onUser);
       tuiEvents.off("clear", onClear);
+      tuiEvents.off("dump-transcript", onDump);
     };
   }, [push, exit]);
 
@@ -183,6 +240,8 @@ function App() {
       setThinking(false);
       push("system", "Wait cancelled. Type another message or /status.");
     }
+    if (key.pageUp) setScroll((s) => s + 8);
+    if (key.pageDown) setScroll((s) => Math.max(0, s - 8));
   });
 
   const handleSubmit = (value) => {
@@ -191,7 +250,12 @@ function App() {
     tuiEvents.emit("user-input", value.trim());
   };
 
-  const visible = messages.slice(-50);
+  const windowSize = 50;
+  const maxScroll = Math.max(0, messages.length - windowSize);
+  const offset = Math.min(scroll, maxScroll);
+  const visible = offset
+    ? messages.slice(Math.max(0, messages.length - windowSize - offset), messages.length - offset)
+    : messages.slice(-windowSize);
   const cols = process.stdout.columns || 80;
 
   return h(Box, { flexDirection: "column", width: "100%" },
@@ -217,7 +281,7 @@ function App() {
         h(Text, { color: connected ? "green" : "yellow" }, connected ? "● " : "○ "),
         connected ? "connected" : "connecting",
       ),
-      h(Text, { dimColor: true }, "esc interrupt · /help · ctrl-c quit"),
+      h(Text, { dimColor: true }, offset ? `pgup/pgdn · +${offset} older · /help` : "esc · pgup history · /help · ctrl-c"),
     ),
   );
 }
