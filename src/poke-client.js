@@ -1,5 +1,5 @@
 import { Poke, PokeTunnel, login, isLoggedIn, getToken } from "poke";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
@@ -25,7 +25,12 @@ function loadState() {
 
 function saveState(state) {
   mkdirSync(join(CONFIG_DIR, "poke-tui"), { recursive: true });
-  writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+  const safe = { ...state };
+  if (safe.terminalWebhook) {
+    safe.terminalWebhook = { triggerId: safe.terminalWebhook.triggerId || null };
+  }
+  writeFileSync(STATE_PATH, JSON.stringify(safe, null, 2), { mode: 0o600 });
+  try { chmodSync(STATE_PATH, 0o600); } catch {}
 }
 
 export class PokeClient {
@@ -36,7 +41,7 @@ export class PokeClient {
     this.tunnel = null;
     this.tunnelInfo = null;
     this.webhooks = [];
-    this.terminalWebhook = loadState().terminalWebhook || null;
+    this.terminalWebhook = null;
   }
 
   async init(mcpPort) {
@@ -47,15 +52,20 @@ export class PokeClient {
 
   async cleanupOldConnection() {
     const state = loadState();
-    if (!state.connectionId) return;
+    const ids = [...new Set(
+      [state.connectionId, ...(state.previousConnectionIds || [])].filter(Boolean)
+    )];
+    if (ids.length === 0) return;
     const token = getToken() || this.apiKey;
     const base = process.env.POKE_API ?? "https://poke.com/api/v1";
-    try {
-      await fetch(`${base}/mcp/connections/${state.connectionId}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-    } catch {}
+    for (const id of ids) {
+      try {
+        await fetch(`${base}/mcp/connections/${id}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } catch {}
+    }
   }
 
   async startTunnel(mcpPort) {
@@ -65,8 +75,7 @@ export class PokeClient {
       return;
     }
 
-    // Keep the previous cloud tunnel URL alive. Poke integrations often still
-    // call /{old-uuid}/mcp on the new local server after a restart.
+    await this.cleanupOldConnection();
 
     this.tunnel = new PokeTunnel({
       url: this.mcpUrl,
@@ -77,12 +86,11 @@ export class PokeClient {
 
     this.tunnel.on("connected", (info) => {
       this.tunnelInfo = info;
-      const prev = loadState();
       saveState({
-        ...prev,
         connectionId: info.connectionId,
         tunnelUrl: info.tunnelUrl || null,
         name: TUNNEL_NAME,
+        previousConnectionIds: [],
       });
       this.onEvent("tunnel-connected", info);
     });

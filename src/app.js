@@ -1,9 +1,28 @@
 import { createMcpServer, startMcpHttpServer, mcpEvents } from "./mcp-server.js";
 import { PokeClient } from "./poke-client.js";
 import { startTUI, tuiEvents } from "./tui.js";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+
+function acquireLock() {
+  const dir = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "poke-tui");
+  mkdirSync(dir, { recursive: true });
+  const lockPath = join(dir, "poke-tui.lock");
+  if (existsSync(lockPath)) {
+    const pid = Number(readFileSync(lockPath, "utf8").trim());
+    if (pid && pid !== process.pid) {
+      try {
+        process.kill(pid, 0);
+        console.error(`poke-tui already running (pid ${pid}). Ctrl-C that window first.`);
+        process.exit(1);
+      } catch {}
+    }
+  }
+  writeFileSync(lockPath, String(process.pid));
+  const release = () => { try { unlinkSync(lockPath); } catch {} };
+  process.on("exit", release);
+}
 
 function resolveToken() {
   if (process.env.POKE_API_KEY) return process.env.POKE_API_KEY;
@@ -30,6 +49,7 @@ if (!POKE_API_KEY) {
   process.exit(1);
 }
 
+acquireLock();
 const inkInstance = startTUI();
 
 const client = new PokeClient({
@@ -41,7 +61,8 @@ const client = new PokeClient({
         break;
       case "tunnel-disconnected":
         tuiEvents.emit("connected", false);
-        tuiEvents.emit("system", "Connection lost. Reconnecting…");
+        tuiEvents.emit("thinking", false);
+        tuiEvents.emit("system", "Connection lost. Restart poke-chat to open a new tunnel.");
         break;
       case "tunnel-error":
         tuiEvents.emit("error", `Connection error: ${data}`);
@@ -94,6 +115,15 @@ async function handleCommand(text) {
     tuiEvents.emit("system", '  /webhook fire <#> {"data":"here"}');
     tuiEvents.emit("system", "  /webhooks");
     tuiEvents.emit("system", "  /status");
+    tuiEvents.emit("system", "  /clear");
+    tuiEvents.emit("system", "  Esc cancels wait · 45s timeout if no terminal reply");
+    return;
+  }
+
+  if (cmd === "clear") {
+    tuiEvents.emit("clear");
+    tuiEvents.emit("thinking", false);
+    tuiEvents.emit("system", "Chat cleared.");
     return;
   }
 

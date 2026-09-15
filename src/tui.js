@@ -84,6 +84,7 @@ function App() {
   const [connected, setConnected] = useState(false);
   const [userName, setUserName] = useState(null);
   const idRef = useRef(0);
+  const lastPokeRef = useRef({ text: "", at: 0 });
 
   const nextId = useCallback(() => `msg-${++idRef.current}`, []);
 
@@ -93,6 +94,14 @@ function App() {
 
   useEffect(() => {
     const onMsg = (role, text) => {
+      if (role === "poke") {
+        const now = Date.now();
+        if (text === lastPokeRef.current.text && now - lastPokeRef.current.at < 15000) {
+          setThinking(false);
+          return;
+        }
+        lastPokeRef.current = { text, at: now };
+      }
       push(role, text);
       if (role === "you") setThinking(true);
       if (role === "poke" || role === "error") setThinking(false);
@@ -103,6 +112,7 @@ function App() {
     const onThink = (v) => setThinking(v);
     const onQuit = () => exit();
     const onUser = (name) => setUserName(name);
+    const onClear = () => setMessages([]);
 
     tuiEvents.on("message", onMsg);
     tuiEvents.on("system", onSys);
@@ -111,6 +121,7 @@ function App() {
     tuiEvents.on("thinking", onThink);
     tuiEvents.on("quit", onQuit);
     tuiEvents.on("user-name", onUser);
+    tuiEvents.on("clear", onClear);
 
     return () => {
       tuiEvents.off("message", onMsg);
@@ -120,13 +131,30 @@ function App() {
       tuiEvents.off("thinking", onThink);
       tuiEvents.off("quit", onQuit);
       tuiEvents.off("user-name", onUser);
+      tuiEvents.off("clear", onClear);
     };
   }, [push, exit]);
+
+  useEffect(() => {
+    if (!thinking) return undefined;
+    const timer = setTimeout(() => {
+      setThinking(false);
+      push(
+        "system",
+        "No terminal reply after 45s. Poke may have answered on iMessage. Keep this window open and send again."
+      );
+    }, 45_000);
+    return () => clearTimeout(timer);
+  }, [thinking, push]);
 
   useInput((ch, key) => {
     if (key.ctrl && ch === "c") {
       tuiEvents.emit("user-quit");
       exit();
+    }
+    if (key.escape && thinking) {
+      setThinking(false);
+      push("system", "Wait cancelled. Type another message or /status.");
     }
   });
 
